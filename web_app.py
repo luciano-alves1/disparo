@@ -5,19 +5,20 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import os
 
 app = FastAPI(title="Executor de Comandos API", description="API para execução de comandos do sistema")
 
 # Configuração CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Em produção, especifique apenas os domínios permitidos
+    allow_origins=["*"],  # Permite acesso de qualquer origem na rede
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-
 
 def executar_cmd_oculto(comando_cmd):
     """Executa comando e retorna a saída"""
@@ -69,11 +70,36 @@ async def executar_comando_api(request: Request):
     """API para executar comando"""
     data = await request.json()
     comando = data.get('comando', '')
+    client_ip = request.client.host
+    client_info = f"Cliente: {client_ip}"
     
     if not comando:
         return {"status": "erro", "erro": "Comando não fornecido"}
     
-    # Executa o comando
+    # Para comandos de rede, retorna informações do cliente
+    if comando.lower() in ['ipconfig', 'ifconfig', 'ip addr', 'hostname']:
+        saida = f"Informações do cliente {client_ip}:\n"
+        saida += f"IP de acesso: {client_ip}\n"
+        saida += f"User-Agent: {request.headers.get('user-agent', 'N/A')}\n"
+        saida += f"Data/Hora: {datetime.now().isoformat()}\n"
+        
+        # Se for acesso local, executa o comando real
+        if client_ip in ['127.0.0.1', 'localhost', '::1']:
+            saida_real = executar_cmd_oculto(comando)
+            saida += f"\n\n--- Saída local ---\n{saida_real}"
+        
+        # Salva no banco
+        salvar_comando(comando, saida, "sucesso")
+        
+        return {
+            "status": "sucesso",
+            "comando": comando,
+            "saida": saida,
+            "timestamp": datetime.now().isoformat(),
+            "client_info": client_info
+        }
+    
+    # Para outros comandos, executa normalmente no servidor
     saida = executar_cmd_oculto(comando)
     
     # Salva no banco
@@ -83,7 +109,8 @@ async def executar_comando_api(request: Request):
         "status": "sucesso",
         "comando": comando,
         "saida": saida,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "client_info": client_info
     }
 
 @app.get("/historico")
@@ -110,5 +137,6 @@ if __name__ == "__main__":
     # Inicia o servidor
     import uvicorn
     print("🌐 Servidor iniciado em: http://localhost:8000")
-    print("💾 Banco de dados: comandos.db")
-    uvicorn.run(app, host="localhost", port=8000)
+    print("💾 Banco de dados: PostgreSQL")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
